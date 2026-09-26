@@ -1,0 +1,18 @@
+services:
+  floodscraper:
+    build: .
+    image: floodscraper:latest
+    init: true
+    restart: unless-stopped
+    environment:
+      # Compose reads ./.env automatically for this interpolation.
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:?set DISCORD_WEBHOOK_URL in .env}
+      STATION_IDS: ${STATION_IDS:-162}
+      HOURS: ${HOURS:-24}
+      INTERVAL_SECONDS: ${INTERVAL_SECONDS:-3600}
+      TZ: ${TZ:-Asia/Bangkok}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

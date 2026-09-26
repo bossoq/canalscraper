@@ -1,0 +1,24 @@
+# Host virtualenv - macOS arm64 binaries, must never enter the image
+.venv
+
+# VCS and tooling
+.git
+.gitignore
+.claude/
+.remember/
+
+# Would override the image's Python 3.12 with a managed CPython 3.9
+.python-version
+
+# Python build artefacts
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Secrets and local output
+.env
+*.csv
+chart.png

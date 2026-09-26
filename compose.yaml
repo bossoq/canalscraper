@@ -3,6 +3,7 @@ name: canalscraper
 services:
   canalscraper:
     image: ghcr.io/bossoq/canalscraper:latest
+    pull_policy: always
     init: true
     restart: unless-stopped
     environment:

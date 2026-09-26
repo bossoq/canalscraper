@@ -1,4 +1,4 @@
-# floodscraper
+# canalscraper
 
 Scrapes a Bangkok water-level station from
 [weather.bangkok.go.th](https://weather.bangkok.go.th/water), charts it, and posts the chart to a

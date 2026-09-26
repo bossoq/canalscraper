@@ -1,7 +1,9 @@
+name: canalscraper
+
 services:
-  floodscraper:
+  canalscraper:
     build: .
-    image: floodscraper:latest
+    image: canalscraper:latest
     init: true
     restart: unless-stopped
     environment:

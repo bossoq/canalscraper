@@ -14,7 +14,6 @@ import argparse
 import io
 import json
 import os
-import re
 import sys
 import time
 from datetime import datetime, timedelta
@@ -25,7 +24,7 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import requests
 
-from bkk_water_scraper import BASE_URL, fetch, parse
+from bkk_water_scraper import BASE_URL, fetch_fresh, parse, station_name
 
 # Dark theme to match Discord
 SURFACE = "#1a1a19"
@@ -34,42 +33,10 @@ TEXT_2 = "#c3c2b7"
 GRID = "#3a3a38"
 LINE = "#3987e5"
 
-# The table pre-creates its newest row with a "-" placeholder, so a fetch can
-# land in the gap before the reading is published.
-STALE_ATTEMPTS = 3
-STALE_WAIT = 30.0
-
 # Spans the Change field reports, on top of the step since the previous reading
 # and the charted window as a whole. Keep ascending: the scan stops at the first
 # lookback the window does not cover.
 LOOKBACK_HOURS = (1, 6, 24)
-
-
-def station_name(html: str, lang: str = "en") -> str:
-    """Pull the station name out of the page's stationNameData block."""
-    m = re.search(rf'"{lang}":\s*".*?<strong>(.*?)</strong>', html)
-    return m.group(1).strip() if m else "Unknown station"
-
-
-def fetch_fresh(station_id: int, attempts: int = STALE_ATTEMPTS, wait: float = STALE_WAIT) -> str:
-    """Fetch until the newest row carries a numeric reading.
-
-    Gives up after `attempts` and returns the page anyway, leaving the caller to
-    fall back to the newest reading that does have a value.
-    """
-    for attempt in range(1, attempts + 1):
-        html = fetch(station_id)
-        rows = parse(html)
-        if rows and rows[-1]["water_level_m_msl"] is not None:
-            return html
-        newest = rows[-1]["datetime_th"] if rows else "no rows"
-        if attempt == attempts:
-            print(f"[stale] {newest} still unpublished after {attempts} tries, "
-                  f"falling back to the last numeric reading", file=sys.stderr)
-            return html
-        print(f"[stale {attempt}/{attempts}] {newest} not published yet, "
-              f"retrying in {wait:.0f}s", file=sys.stderr)
-        time.sleep(wait)
 
 
 def span(delta: timedelta) -> str:

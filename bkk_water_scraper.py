@@ -5,12 +5,14 @@ Usage:
     python bkk_water_scraper.py 162                 # fetch station 162 -> station_162.csv
     python bkk_water_scraper.py 162 -o out.csv
     python bkk_water_scraper.py 162 --file page.html  # parse a saved page instead of fetching
+    python bkk_water_scraper.py 162 --html-out page.html  # just save the page, for other consumers
 
 Requires: pip install requests beautifulsoup4
 """
 import argparse
 import csv
 import random
+import re
 import sys
 import time
 from datetime import datetime
@@ -28,6 +30,11 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "th-TH,th;q=0.9,en;q=0.8",
 }
+
+# The table pre-creates its newest row with a "-" placeholder, so a fetch can
+# land in the gap before the reading is published.
+STALE_ATTEMPTS = 3
+STALE_WAIT = 30.0
 
 
 def fetch(station_id: int, retries: int = 5, backoff: float = 2.0, timeout: int = 30) -> str:
@@ -78,6 +85,33 @@ def parse_level(s: str):
         return None
 
 
+def station_name(html: str, lang: str = "en") -> str:
+    """Pull the station name out of the page's stationNameData block."""
+    m = re.search(rf'"{lang}":\s*".*?<strong>(.*?)</strong>', html)
+    return m.group(1).strip() if m else "Unknown station"
+
+
+def fetch_fresh(station_id: int, attempts: int = STALE_ATTEMPTS, wait: float = STALE_WAIT) -> str:
+    """Fetch until the newest row carries a numeric reading.
+
+    Gives up after `attempts` and returns the page anyway, leaving the caller to
+    fall back to the newest reading that does have a value.
+    """
+    for attempt in range(1, attempts + 1):
+        html = fetch(station_id)
+        rows = parse(html)
+        if rows and rows[-1]["water_level_m_msl"] is not None:
+            return html
+        newest = rows[-1]["datetime_th"] if rows else "no rows"
+        if attempt == attempts:
+            print(f"[stale] {newest} still unpublished after {attempts} tries, "
+                  f"falling back to the last numeric reading", file=sys.stderr)
+            return html
+        print(f"[stale {attempt}/{attempts}] {newest} not published yet, "
+              f"retrying in {wait:.0f}s", file=sys.stderr)
+        time.sleep(wait)
+
+
 def parse(html: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     table = soup.find("table", id="example")
@@ -104,8 +138,18 @@ def main():
     ap.add_argument("station_id", type=int)
     ap.add_argument("-o", "--output")
     ap.add_argument("--file", help="parse a saved HTML file instead of fetching")
+    ap.add_argument("--html-out", help="save the fetched page here and write no CSV, so several "
+                                       "consumers can share one fetch")
     ap.add_argument("--retries", type=int, default=5)
     args = ap.parse_args()
+
+    if args.html_out:
+        # fetch_fresh rather than fetch: whoever reads this file should not have
+        # to cope with the newest row still carrying its "-" placeholder.
+        with open(args.html_out, "w", encoding="utf-8") as f:
+            f.write(fetch_fresh(args.station_id))
+        print(f"Wrote the station {args.station_id} page to {args.html_out}")
+        return
 
     html = open(args.file, encoding="utf-8").read() if args.file else fetch(args.station_id, args.retries)
     rows = parse(html)

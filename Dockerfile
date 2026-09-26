@@ -38,7 +38,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
     MPLCONFIGDIR=/tmp/matplotlib
 
 WORKDIR /app
-COPY bkk_water_scraper.py bkk_water_discord.py ./
+COPY bkk_water_scraper.py bkk_water_discord.py bkk_water_ha.py ./
 # --chmod=755: the host file is not executable, and a plain COPY would make the
 # container die with "permission denied" at start, long after a green build.
 COPY --chmod=755 docker-entrypoint.sh ./

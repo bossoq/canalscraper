@@ -39,6 +39,11 @@ LINE = "#3987e5"
 STALE_ATTEMPTS = 3
 STALE_WAIT = 30.0
 
+# Spans the Change field reports, on top of the step since the previous reading
+# and the charted window as a whole. Keep ascending: the scan stops at the first
+# lookback the window does not cover.
+LOOKBACK_HOURS = (1, 6, 24)
+
 
 def station_name(html: str, lang: str = "en") -> str:
     """Pull the station name out of the page's stationNameData block."""
@@ -73,6 +78,26 @@ def span(delta: timedelta) -> str:
     if minutes < 60:
         return f"{minutes:.0f} min"
     return f"{round(minutes / 60, 1):g} h"
+
+
+def changes(rows: list[dict], times: list[datetime]) -> list[str]:
+    """Latest reading minus the previous one, each covered lookback, and the window start."""
+    latest, now = rows[-1]["water_level_m_msl"], times[-1]
+    earlier = [len(rows) - 2] if len(rows) > 1 else []
+    for hours in LOOKBACK_HOURS:
+        cutoff = now - timedelta(hours=hours)
+        if cutoff < times[0]:
+            break
+        earlier.append(max(i for i, t in enumerate(times) if t <= cutoff))
+    earlier.append(0)
+
+    lines, seen = [], {len(rows) - 1}
+    for i in earlier:  # already ordered newest-first, so spans come out ascending
+        if i in seen:
+            continue
+        seen.add(i)
+        lines.append(f"{latest - rows[i]['water_level_m_msl']:+.2f} m ({span(now - times[i])})")
+    return lines
 
 
 def make_chart(rows: list[dict], title: str) -> bytes:
@@ -156,19 +181,10 @@ def main():
     png = make_chart(rows, name_en)  # English title: matplotlib's default font has no Thai glyphs
 
     levels = [r["water_level_m_msl"] for r in rows]
-    latest, first = rows[-1], rows[0]
+    latest = rows[-1]
     times = [datetime.strptime(r["datetime"], "%Y-%m-%d %H:%M") for r in rows]
 
-    # Change since the previous reading, then over the whole charted window.
-    # With only two rows those two spans are the same, so show just the one.
-    change_lines = []
-    if len(rows) > 1:
-        step = latest["water_level_m_msl"] - rows[-2]["water_level_m_msl"]
-        change_lines.append(f"{step:+.2f} m ({span(times[-1] - times[-2])})")
-    if len(rows) > 2:
-        window = latest["water_level_m_msl"] - first["water_level_m_msl"]
-        change_lines.append(f"{window:+.2f} m ({span(times[-1] - times[0])})")
-    change_value = "\n".join(change_lines) or "n/a"
+    change_value = "\n".join(changes(rows, times)) or "n/a"
     embed = {
         "title": f"💧 {name_th}",
         "description": name_en,

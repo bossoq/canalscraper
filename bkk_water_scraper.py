@@ -66,6 +66,18 @@ def buddhist_to_iso(s: str) -> str:
     return datetime(year - 543, month, day, *map(int, t.split(":"))).strftime("%Y-%m-%d %H:%M")
 
 
+def parse_level(s: str):
+    """Water level as a float, or None when the reading has not been published yet.
+
+    The table pre-creates its newest row with a '-' placeholder and fills the
+    value in a few moments later; other non-numeric junk turns up occasionally.
+    """
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
 def parse(html: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     table = soup.find("table", id="example")
@@ -82,7 +94,7 @@ def parse(html: str) -> list[dict]:
             "seq": int(seq),
             "datetime_th": dt,
             "datetime": buddhist_to_iso(dt),
-            "water_level_m_msl": float(level) if level not in ("", "-") else None,
+            "water_level_m_msl": parse_level(level),
         })
     return rows
 

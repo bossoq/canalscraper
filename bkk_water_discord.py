@@ -34,11 +34,45 @@ TEXT_2 = "#c3c2b7"
 GRID = "#3a3a38"
 LINE = "#3987e5"
 
+# The table pre-creates its newest row with a "-" placeholder, so a fetch can
+# land in the gap before the reading is published.
+STALE_ATTEMPTS = 3
+STALE_WAIT = 30.0
+
 
 def station_name(html: str, lang: str = "en") -> str:
     """Pull the station name out of the page's stationNameData block."""
     m = re.search(rf'"{lang}":\s*".*?<strong>(.*?)</strong>', html)
     return m.group(1).strip() if m else "Unknown station"
+
+
+def fetch_fresh(station_id: int, attempts: int = STALE_ATTEMPTS, wait: float = STALE_WAIT) -> str:
+    """Fetch until the newest row carries a numeric reading.
+
+    Gives up after `attempts` and returns the page anyway, leaving the caller to
+    fall back to the newest reading that does have a value.
+    """
+    for attempt in range(1, attempts + 1):
+        html = fetch(station_id)
+        rows = parse(html)
+        if rows and rows[-1]["water_level_m_msl"] is not None:
+            return html
+        newest = rows[-1]["datetime_th"] if rows else "no rows"
+        if attempt == attempts:
+            print(f"[stale] {newest} still unpublished after {attempts} tries, "
+                  f"falling back to the last numeric reading", file=sys.stderr)
+            return html
+        print(f"[stale {attempt}/{attempts}] {newest} not published yet, "
+              f"retrying in {wait:.0f}s", file=sys.stderr)
+        time.sleep(wait)
+
+
+def span(delta: timedelta) -> str:
+    """timedelta -> '5 min' or '24 h'."""
+    minutes = delta.total_seconds() / 60
+    if minutes < 60:
+        return f"{minutes:.0f} min"
+    return f"{round(minutes / 60, 1):g} h"
 
 
 def make_chart(rows: list[dict], title: str) -> bytes:
@@ -108,7 +142,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="save chart.png, don't post")
     args = ap.parse_args()
 
-    html = open(args.file, encoding="utf-8").read() if args.file else fetch(args.station_id)
+    html = open(args.file, encoding="utf-8").read() if args.file else fetch_fresh(args.station_id)
     rows = [r for r in parse(html) if r["water_level_m_msl"] is not None]
     if not rows:
         sys.exit("No readings found in the table")
@@ -123,7 +157,18 @@ def main():
 
     levels = [r["water_level_m_msl"] for r in rows]
     latest, first = rows[-1], rows[0]
-    change = latest["water_level_m_msl"] - first["water_level_m_msl"]
+    times = [datetime.strptime(r["datetime"], "%Y-%m-%d %H:%M") for r in rows]
+
+    # Change since the previous reading, then over the whole charted window.
+    # With only two rows those two spans are the same, so show just the one.
+    change_lines = []
+    if len(rows) > 1:
+        step = latest["water_level_m_msl"] - rows[-2]["water_level_m_msl"]
+        change_lines.append(f"{step:+.2f} m ({span(times[-1] - times[-2])})")
+    if len(rows) > 2:
+        window = latest["water_level_m_msl"] - first["water_level_m_msl"]
+        change_lines.append(f"{window:+.2f} m ({span(times[-1] - times[0])})")
+    change_value = "\n".join(change_lines) or "n/a"
     embed = {
         "title": f"💧 {name_th}",
         "description": name_en,
@@ -131,7 +176,7 @@ def main():
         "color": int(LINE[1:], 16),
         "fields": [
             {"name": "Latest", "value": f"**{latest['water_level_m_msl']:+.2f} m**\n{latest['datetime_th']}", "inline": True},
-            {"name": "Change", "value": f"{change:+.2f} m\nsince {first['datetime_th']}", "inline": True},
+            {"name": "Change", "value": change_value, "inline": True},
             {"name": "Min / Max", "value": f"{min(levels):+.2f} / {max(levels):+.2f} m", "inline": True},
         ],
         "image": {"url": "attachment://chart.png"},

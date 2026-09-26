@@ -2,8 +2,7 @@ name: canalscraper
 
 services:
   canalscraper:
-    build: .
-    image: canalscraper:latest
+    image: ghcr.io/bossoq/canalscraper:latest
     init: true
     restart: unless-stopped
     environment:

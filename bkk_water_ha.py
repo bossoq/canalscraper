@@ -73,6 +73,9 @@ def mqtt_messages(station_id: int, name: str, latest: dict, prefix: str, expire_
         "state_topic": state_topic,
         "value_template": "{{ value_json.level }}",
         "json_attributes_topic": state_topic,
+        # Project only reading_time. Without this every key in the payload
+        # becomes an attribute, and `level` would duplicate the state exactly.
+        "json_attributes_template": "{{ {'reading_time': value_json.reading_time} | tojson }}",
         "unit_of_measurement": "m",
         "device_class": "distance",
         # Without state_class HA keeps no statistics for the entity at all.
@@ -83,9 +86,13 @@ def mqtt_messages(station_id: int, name: str, latest: dict, prefix: str, expire_
         "expire_after": expire_after,
         "device": {
             "identifiers": [node],
-            "name": f"{name} (station {station_id})",
+            # Short and predictable: HA builds the entity id from the device
+            # name plus the entity name, ignoring object_id below, and the full
+            # station name here produced a 94-character entity id. The real name
+            # lives in model, which is display-only.
+            "name": f"Canalscraper {station_id}",
             "manufacturer": "weather.bangkok.go.th",
-            "model": "Water-level station",
+            "model": name,
             "configuration_url": BASE_URL.format(id=station_id),
         },
     }

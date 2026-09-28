@@ -12,7 +12,8 @@ docker compose up -d
 docker compose logs -f
 ```
 
-The container posts immediately on start, then every `INTERVAL_SECONDS`.
+The container scrapes immediately on start, then every `INTERVAL_SECONDS`. Discord gets a post
+on the first round and on 1 round in `DISCORD_EVERY` after it.
 
 ### Configuration
 
@@ -24,6 +25,7 @@ All via `.env`:
 | `STATION_IDS`          | `162`          | Comma-separated station ids; one chart posted per station |
 | `HOURS`                | `24`           | Chart only the last N hours; empty means the whole page   |
 | `INTERVAL_SECONDS`     | `3600`         | Seconds between rounds                                   |
+| `DISCORD_EVERY`        | `1`            | Post to Discord on 1 round in N; the scrape and Home Assistant still run every round |
 | `TZ`                   | `Asia/Bangkok` | Affects log timestamps only                              |
 
 Changed `.env`? `docker compose up -d` again to apply it — no rebuild needed.

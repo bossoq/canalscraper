@@ -12,6 +12,7 @@ services:
       STATION_IDS: ${STATION_IDS:-162}
       HOURS: ${HOURS:-24}
       INTERVAL_SECONDS: ${INTERVAL_SECONDS:-3600}
+      DISCORD_EVERY: ${DISCORD_EVERY:-1}
       TZ: ${TZ:-Asia/Bangkok}
       # Home Assistant. Unset MQTT_HOST skips the sensor, unset HA_URL/HA_TOKEN
       # skips the statistics import, and unsetting both skips the step entirely.

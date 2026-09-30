@@ -6,19 +6,26 @@ Usage:
     python bkk_water_ha.py 162
     python bkk_water_ha.py 162 --file page.html --dry-run   # print the payloads, send nothing
 
-Two independent halves, each skipped when its config is absent:
+Two halves, each skipped when its config is absent:
 
   * MQTT (MQTT_HOST) - a discovery config and a state message, both retained, so
     HA creates the entity itself and recovers the value across a restart.
   * Statistics (HA_URL + HA_TOKEN) - the page's 48h as hourly long-term
-    statistics, over the WebSocket API.
+    statistics on the MQTT sensor's own statistic id, over the WebSocket API.
+    Not independent of the first: it writes onto the entity MQTT created, so it
+    needs that entity to exist, and an admin token to read the registry.
 
 The split is not a preference, it is a constraint: HA stamps every MQTT state
 with its arrival time, so replaying old readings onto a state topic records them
 all at once and draws a flat line ending in a jump. History has to go in as
-statistics instead, which land in a Statistics graph card rather than the
-history graph - statistics and states are separate stores and this writes only
-the former.
+statistics instead.
+
+Because the whole 48h goes in every round, and an import overwrites any hour it
+already holds, gaps heal themselves: a run of failed fetches leaves a hole, and
+the first round that succeeds afterwards fills it back in. That only mends the
+statistics store, which is what a Statistics graph card and ApexCharts read -
+the History card reads states, a separate store with no API for writing the
+past, so a hole there stays.
 
 Requires: pip install requests beautifulsoup4 paho-mqtt websocket-client
 Needs bkk_water_scraper.py in the same folder, and HA 2025.11 or newer.
@@ -40,9 +47,15 @@ from bkk_water_scraper import BASE_URL, fetch_fresh, parse, station_name
 TZ = timezone(timedelta(hours=7))
 
 DISCOVERY_PREFIX = "homeassistant"
-# External statistic ids are "<source>:<object_id>" - a colon, not a period, and
-# the source has to match the part in front of it.
-STAT_SOURCE = "canalscraper"
+# Both halves send these, and they have to agree: HA files an entity's
+# statistics under a unit class and converts silently if the import disagrees.
+UNIT = "m"
+UNIT_CLASS = "distance"
+
+
+def unique_id(station_id: int) -> str:
+    """The MQTT sensor's unique_id, and what the statistics import looks it up by."""
+    return f"canalscraper_{station_id}_level"
 
 
 def hourly_stats(rows: list[dict]) -> list[dict]:
@@ -65,19 +78,20 @@ def hourly_stats(rows: list[dict]) -> list[dict]:
 def mqtt_messages(station_id: int, name: str, latest: dict, prefix: str, expire_after: int) -> list[dict]:
     """Discovery config + state, both retained so a restarted HA finds them waiting."""
     node = f"canalscraper_{station_id}"
+    uid = unique_id(station_id)
     state_topic = f"{prefix}/{station_id}/state"
     config = {
         "name": "Water level",
-        "unique_id": f"{node}_level",
-        "object_id": f"{node}_level",
+        "unique_id": uid,
+        "object_id": uid,
         "state_topic": state_topic,
         "value_template": "{{ value_json.level }}",
         "json_attributes_topic": state_topic,
         # Project only reading_time. Without this every key in the payload
         # becomes an attribute, and `level` would duplicate the state exactly.
         "json_attributes_template": "{{ {'reading_time': value_json.reading_time} | tojson }}",
-        "unit_of_measurement": "m",
-        "device_class": "distance",
+        "unit_of_measurement": UNIT,
+        "device_class": UNIT_CLASS,
         # Without state_class HA keeps no statistics for the entity at all.
         "state_class": "measurement",
         "suggested_display_precision": 2,
@@ -116,9 +130,40 @@ def expect(ws, want: str) -> dict:
     return msg
 
 
-def import_statistics(ha_url: str, token: str, station_id: int, name: str,
-                      stats: list[dict], timeout: int = 30) -> None:
-    """Write the hourly buckets in as an external statistic over the WebSocket API."""
+def ws_command(ws, msg_id: int, command: dict) -> object:
+    """Send one command, return its result, raise on anything but success."""
+    ws.send(json.dumps({"id": msg_id, **command}))
+    reply = json.loads(ws.recv())
+    if not reply.get("success"):
+        raise RuntimeError(f"Home Assistant rejected {command['type']}: {reply.get('error', reply)}")
+    return reply.get("result")
+
+
+def find_entity_id(ws, msg_id: int, uid: str) -> str:
+    """Ask the registry which entity the MQTT discovery config became.
+
+    Not derived: HA builds the entity id from the device and entity names, and a
+    rename in the UI moves it again. unique_id is the one handle that never
+    moves. Guessing instead would fail silently - HA validates a statistic id
+    against nothing, so a wrong guess just accrues statistics no entity owns.
+    """
+    for entry in ws_command(ws, msg_id, {"type": "config/entity_registry/list"}):
+        if entry.get("platform") == "mqtt" and entry.get("unique_id") == uid:
+            return entry["entity_id"]
+    raise RuntimeError(
+        f"no MQTT entity with unique_id {uid} in the Home Assistant registry - "
+        "the discovery config has to arrive first, so check MQTT_HOST is the broker HA itself uses"
+    )
+
+
+def import_statistics(ha_url: str, token: str, station_id: int,
+                      stats: list[dict], timeout: int = 30) -> str:
+    """Write the hourly buckets onto the MQTT sensor's own statistic id, and return it.
+
+    Onto the entity's id rather than an external "canalscraper:..." one, which
+    is what this used to do: external statistics are invisible to the entity
+    picker, the history graph and the chart cards, so nothing could plot them.
+    """
     ws_url = (ha_url.rstrip("/")
               .replace("https://", "wss://", 1)
               .replace("http://", "ws://", 1)) + "/api/websocket"
@@ -127,24 +172,33 @@ def import_statistics(ha_url: str, token: str, station_id: int, name: str,
         expect(ws, "auth_required")
         ws.send(json.dumps({"type": "auth", "access_token": token}))
         expect(ws, "auth_ok")
-        ws.send(json.dumps({
-            "id": 1,
+        # Command ids are sequenced here rather than inside the helpers: HA
+        # rejects a reused id on a connection, and only the caller that owns the
+        # connection can know what has already gone over it.
+        entity_id = find_entity_id(ws, 1, unique_id(station_id))
+        # Every field here mirrors the row the recorder keeps for the entity
+        # itself. They share one statistics_meta row, so a field that disagrees
+        # is not a second opinion, it overwrites HA's own.
+        ws_command(ws, 2, {
             "type": "recorder/import_statistics",
             "metadata": {
                 "has_sum": False,
                 # mean_type 1 = arithmetic. Replaces has_mean, which HA removes
                 # in 2026.11, and which is why this needs HA 2025.11 or newer.
                 "mean_type": 1,
-                "name": f"{name} water level",
-                "source": STAT_SOURCE,
-                "statistic_id": f"{STAT_SOURCE}:station_{station_id}_level",
-                "unit_of_measurement": "m",
+                # None, not a name of ours: recorder leaves this null for an
+                # entity's own statistics so the display name follows the entity.
+                "name": None,
+                # Exactly "recorder", the only source HA accepts for a statistic
+                # id that is an entity id. Anything else is "Invalid source".
+                "source": "recorder",
+                "statistic_id": entity_id,
+                "unit_of_measurement": UNIT,
+                "unit_class": UNIT_CLASS,
             },
             "stats": stats,
-        }))
-        reply = json.loads(ws.recv())
-        if not reply.get("success"):
-            raise RuntimeError(f"Home Assistant rejected the import: {reply.get('error', reply)}")
+        })
+        return entity_id
     finally:
         ws.close()
 
@@ -171,6 +225,8 @@ def main():
     if args.dry_run:
         print(json.dumps({"mqtt": msgs, "statistics_tail": stats[-3:]}, ensure_ascii=False, indent=2))
         print(f"{len(stats)} hourly buckets, {stats[0]['start']} .. {stats[-1]['start']} (last 3 shown)")
+        print(f"would import onto the entity carrying unique_id {unique_id(args.station_id)}, "
+              "looked up from the registry at send time")
         return
 
     mqtt_host = os.environ.get("MQTT_HOST")
@@ -185,8 +241,8 @@ def main():
 
     ha_url, token = os.environ.get("HA_URL"), os.environ.get("HA_TOKEN")
     if ha_url and token:
-        import_statistics(ha_url, token, args.station_id, name, stats)
-        print(f"Imported {len(stats)} hourly statistics into {ha_url}")
+        entity_id = import_statistics(ha_url, token, args.station_id, stats)
+        print(f"Imported {len(stats)} hourly statistics onto {entity_id}")
     else:
         print("HA_URL/HA_TOKEN unset, skipping the statistics import", file=sys.stderr)
 

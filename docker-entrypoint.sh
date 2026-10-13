@@ -1,6 +1,6 @@
 #!/bin/sh
-# Fetch each station once, post a chart to Discord, publish to Home Assistant
-# if it is configured, then sleep. Repeat forever.
+# Fetch each station once, post a chart to Discord and publish to Home
+# Assistant if they are configured, then sleep. Repeat forever.
 set -u
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S %Z')] $*"; }
@@ -11,6 +11,7 @@ trap terminate TERM INT
 : "${INTERVAL_SECONDS:=3600}"
 : "${DISCORD_EVERY:=1}"
 HOURS="${HOURS:-}"
+DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-}"
 
 # A 0 or a typo here would blow up the modulo below mid-round, so reject it
 # now rather than crash-loop later.
@@ -18,7 +19,15 @@ case "$DISCORD_EVERY" in
     ""|*[!0-9]*|0) log "DISCORD_EVERY must be a positive integer, got '$DISCORD_EVERY'"; exit 1 ;;
 esac
 
-log "starting: stations=$STATION_IDS hours=${HOURS:-all} interval=${INTERVAL_SECONDS}s discord=1-in-${DISCORD_EVERY}"
+# An unset webhook skips the Discord post entirely, the way an unset MQTT_HOST
+# skips the sensor.
+if [ -n "$DISCORD_WEBHOOK_URL" ]; then
+    discord_state="1-in-${DISCORD_EVERY}"
+else
+    discord_state="off"
+fi
+
+log "starting: stations=$STATION_IDS hours=${HOURS:-all} interval=${INTERVAL_SECONDS}s discord=${discord_state}"
 
 # One fetch per station per round, shared by every consumer below. /tmp is the
 # only writable directory for the unprivileged user the image runs as.
@@ -30,7 +39,9 @@ while true; do
     # the fetch and Home Assistant keep running every round: the interval is
     # what the live sensor's expire_after is derived from, so quieting the
     # channel by stretching it would make the sensor staler too.
-    if [ $(( (round - 1) % DISCORD_EVERY )) -eq 0 ]; then
+    if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+        post_to_discord=no
+    elif [ $(( (round - 1) % DISCORD_EVERY )) -eq 0 ]; then
         post_to_discord=yes
     else
         post_to_discord=no

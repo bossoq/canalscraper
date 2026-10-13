@@ -7,8 +7,9 @@ services:
     init: true
     restart: unless-stopped
     environment:
-      # Compose reads ./.env automatically for this interpolation.
-      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:?set DISCORD_WEBHOOK_URL in .env}
+      # Compose reads ./.env automatically for this interpolation. Unset
+      # DISCORD_WEBHOOK_URL skips the Discord post.
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
       STATION_IDS: ${STATION_IDS:-162}
       HOURS: ${HOURS:-24}
       INTERVAL_SECONDS: ${INTERVAL_SECONDS:-3600}

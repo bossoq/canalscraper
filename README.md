@@ -13,7 +13,8 @@ docker compose logs -f
 ```
 
 The container scrapes immediately on start, then every `INTERVAL_SECONDS`. Discord gets a post
-on the first round and on 1 round in `DISCORD_EVERY` after it.
+on the first round and on 1 round in `DISCORD_EVERY` after it. Leave `DISCORD_WEBHOOK_URL` empty to
+skip Discord entirely and run the Home Assistant half alone.
 
 ### Configuration
 
@@ -21,7 +22,7 @@ All via `.env`:
 
 | Variable               | Default        | Meaning                                                  |
 | ---------------------- | -------------- | -------------------------------------------------------- |
-| `DISCORD_WEBHOOK_URL`  | **required**   | Channel → Integrations → Webhooks → Copy Webhook URL     |
+| `DISCORD_WEBHOOK_URL`  | unset          | Channel → Integrations → Webhooks → Copy Webhook URL; unset skips the Discord post |
 | `STATION_IDS`          | `162`          | Comma-separated station ids; one chart posted per station |
 | `HOURS`                | `24`           | Chart only the last N hours; empty means the whole page   |
 | `INTERVAL_SECONDS`     | `3600`         | Seconds between rounds                                   |
